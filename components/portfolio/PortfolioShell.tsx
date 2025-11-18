@@ -8,6 +8,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Button } from "@/components/ui/button"
 import { Spinner } from "@/components/ui/spinner"
 import { ErrorDisplay } from "@/components/ui/error-display"
+import { TrendingUp, TrendingDown, Wallet, PieChart } from "lucide-react"
 
 type Trade = {
   id: string
@@ -226,18 +227,121 @@ function OpenPositionsList() {
 }
 
 export default function PortfolioShell() {
+    const [stats, setStats] = useState({
+      totalDeposited: 50000,
+      currentValue: 50000,
+      totalPnL: 0,
+      winRate: 0,
+      totalTrades: 0,
+    })
+    const [loading, setLoading] = useState(true)
+
+    useEffect(() => {
+      const fetchStats = async () => {
+        try {
+          // Simulate fetching portfolio stats
+          const positions = await fetch("/api/portfolio/positions").then(r => r.json())
+          const trades = await fetch("/api/portfolio/history").then(r => r.json())
+          
+          let totalPnL = 0
+          if (positions.positions) {
+            positions.positions.forEach((p: any) => {
+              totalPnL += Number(p.unrealizedPnl) || 0
+            })
+          }
+          
+          const totalTrades = trades.trades?.length || 0
+          const winningTrades = trades.trades?.filter((t: any) => t.pnl > 0).length || 0
+          
+          setStats({
+            totalDeposited: 50000,
+            currentValue: 50000 + totalPnL,
+            totalPnL,
+            winRate: totalTrades > 0 ? (winningTrades / totalTrades) * 100 : 0,
+            totalTrades,
+          })
+        } catch (err) {
+          // Use defaults
+        } finally {
+          setLoading(false)
+        }
+      }
+      fetchStats()
+    }, [])
+
+    const StatCard = ({ icon: Icon, label, value, color }: any) => (
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.3 }}
+      >
+        <Card className="bg-gradient-to-br from-gray-50 to-white">
+          <CardContent className="p-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-muted-foreground mb-1">{label}</p>
+                <p className="text-2xl font-bold">{value}</p>
+              </div>
+              <div className={`p-3 rounded-lg ${color}`}>
+                <Icon className="h-6 w-6 text-white" />
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      </motion.div>
+    )
+
     return (
-      <div className="container mx-auto p-6">
-        <h1 className="text-2xl font-bold mb-4">My Portfolio</h1>
-        <Tabs defaultValue="history">
-          <TabsList>
+      <div className="container mx-auto p-6 space-y-6">
+        <div>
+          <h1 className="text-3xl font-bold mb-2">My Portfolio</h1>
+          <p className="text-muted-foreground">Track your trades and open positions</p>
+        </div>
+
+        {/* Stats Grid */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+          <StatCard
+            icon={Wallet}
+            label="Current Value"
+            value={`$${stats.currentValue.toLocaleString(undefined, { maximumFractionDigits: 2 })}`}
+            color="bg-blue-500"
+          />
+          <StatCard
+            icon={stats.totalPnL >= 0 ? TrendingUp : TrendingDown}
+            label="Total P&L"
+            value={`$${stats.totalPnL.toLocaleString(undefined, { maximumFractionDigits: 2 })}`}
+            color={stats.totalPnL >= 0 ? "bg-green-500" : "bg-red-500"}
+          />
+          <StatCard
+            icon={PieChart}
+            label="ROI"
+            value={`${((stats.totalPnL / stats.totalDeposited) * 100).toFixed(2)}%`}
+            color={stats.totalPnL >= 0 ? "bg-purple-500" : "bg-orange-500"}
+          />
+          <StatCard
+            icon={TrendingUp}
+            label="Win Rate"
+            value={`${stats.winRate.toFixed(1)}%`}
+            color="bg-indigo-500"
+          />
+          <StatCard
+            icon={Wallet}
+            label="Total Trades"
+            value={stats.totalTrades}
+            color="bg-cyan-500"
+          />
+        </div>
+
+        {/* Positions and History Tabs */}
+        <Tabs defaultValue="positions" className="w-full">
+          <TabsList className="grid w-full grid-cols-2">
             <TabsTrigger value="positions">Open Positions</TabsTrigger>
             <TabsTrigger value="history">Trade History</TabsTrigger>
           </TabsList>
-          <TabsContent value="positions">
+          <TabsContent value="positions" className="space-y-4">
             <OpenPositionsList />
           </TabsContent>
-          <TabsContent value="history">
+          <TabsContent value="history" className="space-y-4">
             <TradeHistoryList />
           </TabsContent>
         </Tabs>
