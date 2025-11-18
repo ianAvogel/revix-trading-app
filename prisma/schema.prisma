@@ -1,0 +1,335 @@
+// Revix Paper Trading Platform Database Schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// USER & AUTHENTICATION
+// ============================================
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  passwordHash  String
+  alias         String    @unique
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Profile & Preferences
+  experienceLevel String  @default("beginner") // beginner, intermediate, advanced
+  topAssets       String[] // ["BTC", "ETH", "SOL"]
+  notificationPrefs Json   @default("{\"email\": true, \"telegram\": false}")
+
+  // Privacy
+  isPublic      Boolean   @default(false)
+  avatarUrl     String?
+  bio           String?
+
+  // Relations
+  accounts      VirtualAccount[]
+  conversations MentorConversation[]
+  signalActions UserSignalAction[]
+  leaderboardEntries LeaderboardEntry[]
+  tournamentEntries TournamentEntry[]
+
+  @@index([email])
+  @@index([alias])
+}
+
+
+// ============================================
+// VIRTUAL ACCOUNTS & TRADING
+// ============================================
+
+model VirtualAccount {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  name        String   @default("Main Account")
+  initialBalance Decimal @default(50000) @db.Decimal(18, 2)
+  currentBalance Decimal @default(50000) @db.Decimal(18, 2)
+  equity      Decimal  @default(50000) @db.Decimal(18, 2)
+
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  positions   Position[]
+  trades      Trade[]
+  tournamentEntries TournamentEntry[]
+
+  @@index([userId])
+  @@index([isActive])
+}
+
+model Position {
+  id          String   @id @default(cuid())
+  accountId   String
+  account     VirtualAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  symbol      String   // BTC, ETH, etc.
+  side        String   // LONG, SHORT
+  quantity    Decimal  @db.Decimal(18, 8)
+  entryPrice  Decimal  @db.Decimal(18, 2)
+  currentPrice Decimal @db.Decimal(18, 2)
+
+  unrealizedPnl Decimal @db.Decimal(18, 2)
+  realizedPnl   Decimal @default(0) @db.Decimal(18, 2)
+
+  isOpen      Boolean  @default(true)
+  openedAt    DateTime @default(now())
+  closedAt    DateTime?
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  trades      Trade[]
+
+  @@index([accountId])
+  @@index([symbol])
+  @@index([isOpen])
+}
+
+model Trade {
+  id          String   @id @default(cuid())
+  accountId   String
+  account     VirtualAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  positionId  String?
+  position    Position? @relation(fields: [positionId], references: [id])
+
+  symbol      String
+  side        String   // BUY, SELL
+  type        String   // MARKET, LIMIT
+  quantity    Decimal  @db.Decimal(18, 8)
+  price       Decimal  @db.Decimal(18, 2)
+
+  // Execution details
+  slippage    Decimal  @default(0) @db.Decimal(10, 4) // percentage
+  fee         Decimal  @db.Decimal(18, 2)
+  total       Decimal  @db.Decimal(18, 2)
+
+  status      String   @default("EXECUTED") // PENDING, EXECUTED, CANCELLED
+  executedAt  DateTime @default(now())
+
+  // Audit trail
+  signalId    String?
+  signal      Signal?  @relation(fields: [signalId], references: [id])
+  mentorSuggested Boolean @default(false)
+
+  @@index([accountId])
+  @@index([symbol])
+  @@index([executedAt])
+
+  // Relation to trade audit entries
+  audits      TradeAudit[]
+}
+
+// ============================================
+// TRADE AUDIT (Append-only, server-signed)
+// ============================================
+model TradeAudit {
+  id          String   @id @default(cuid())
+  tradeId     String
+  trade       Trade    @relation(fields: [tradeId], references: [id], onDelete: Cascade)
+
+  action      String   // CREATED, UPDATED, CANCELLED, EXECUTED
+  actor       String   // USER, SYSTEM
+  actorId     String?  // userId if actor=USER
+  timestamp   DateTime @default(now())
+  details     Json?    // Full payload or metadata about the event
+  serverHash  String?  // server signature / hash for verifiability
+
+  @@index([tradeId])
+  @@index([actorId])
+  @@index([timestamp])
+}
+
+// ============================================
+// AI SIGNALS & MENTOR
+// ============================================
+
+model Signal {
+  id          String   @id @default(cuid())
+
+  symbol      String
+  direction   String   // BUY, SELL
+  confidence  Int      // 60-95
+
+  // AI Rationale
+  rationale   Json     // [{point: "RSI oversold at 28"}, {point: "Support at $60k"}, ...]
+
+  // Technical indicators used
+  indicators  Json     // {rsi: 28, ma50: 62000, ...}
+
+  // Lifecycle
+  createdAt   DateTime @default(now())
+  expiresAt   DateTime
+  isActive    Boolean  @default(true)
+
+  // Relations
+  userActions UserSignalAction[]
+  trades      Trade[]
+
+  @@index([symbol])
+  @@index([createdAt])
+  @@index([isActive])
+}
+
+model UserSignalAction {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  signalId    String
+  signal      Signal   @relation(fields: [signalId], references: [id], onDelete: Cascade)
+
+  action      String   // APPLIED, IGNORED, SAVED
+  timestamp   DateTime @default(now())
+
+  @@index([userId])
+  @@index([signalId])
+}
+
+model MentorConversation {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  contextType String   // GLOBAL, ACCOUNT, TRADE, SIGNAL
+  contextId   String?  // accountId, tradeId, signalId
+
+  messages    Json     // [{role: "user", content: "..."}, {role: "assistant", content: "..."}]
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([userId])
+  @@index([createdAt])
+}
+
+// ============================================
+// LEADERBOARDS & TOURNAMENTS
+// ============================================
+
+model LeaderboardEntry {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  period      String   // GLOBAL, WEEKLY, MONTHLY
+
+  roi         Decimal  @db.Decimal(10, 4)
+  maxDrawdown Decimal  @db.Decimal(10, 4)
+  riskScore   Decimal  @db.Decimal(10, 2)
+
+  rank        Int
+
+  calculatedAt DateTime @default(now())
+
+  @@unique([userId, period])
+  @@index([period, rank])
+  @@index([calculatedAt])
+}
+
+model Tournament {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  
+  startTime   DateTime
+  endTime     DateTime
+  
+  creatorId   String? // Null if system-created
+  
+  entryFee    Decimal  @default(0) @db.Decimal(18, 2)
+  prizePool   Decimal  @default(0) @db.Decimal(18, 2)
+  
+  rules       Json?    // { "maxTrades": 100, "allowedSymbols": ["BTC", "ETH"] }
+  
+  createdAt   DateTime @default(now())
+  
+  // Relations
+  entries     TournamentEntry[]
+  
+  @@index([startTime])
+  @@index([endTime])
+}
+
+model TournamentEntry {
+  id          String   @id @default(cuid())
+  
+  tournamentId String
+  tournament   Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  accountId   String   @unique // Each user gets a unique virtual account for the tournament
+  account     VirtualAccount @relation(fields: [accountId], references: [id], onDelete:Cascade)
+
+  rank        Int?
+  finalEquity Decimal? @db.Decimal(18, 2)
+  
+  joinedAt    DateTime @default(now())
+  
+  @@index([tournamentId])
+  @@index([userId])
+}
+
+// ============================================
+// MARKET DATA (Cached)
+// ============================================
+
+model MarketData {
+  id          String   @id @default(cuid())
+
+  symbol      String   @unique
+
+  // OHLCV
+  open        Decimal  @db.Decimal(18, 2)
+  high        Decimal  @db.Decimal(18, 2)
+  low         Decimal  @db.Decimal(18, 2)
+  close       Decimal  @db.Decimal(18, 2)
+  volume      Decimal  @db.Decimal(18, 2)
+
+  // Market info
+  marketCap   Decimal? @db.Decimal(20, 2)
+  change24h   Decimal? @db.Decimal(10, 4)
+  change7d    Decimal? @db.Decimal(10, 4)
+
+  timestamp   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([symbol])
+  @@index([timestamp])
+}
+
+// ============================================
+// HISTORICAL DATA (For Replay/Time-Travel)
+// ============================================
+
+model HistoricalData {
+  id          String   @id @default(cuid())
+
+  symbol      String
+
+  // OHLCV
+  open        Decimal  @db.Decimal(18, 2)
+  high        Decimal  @db.Decimal(18, 2)
+  low         Decimal  @db.Decimal(18, 2)
+  close       Decimal  @db.Decimal(18, 2)
+  volume      Decimal  @db.Decimal(18, 2)
+
+  // Timestamp of this candle
+  timestamp   DateTime
+
+  @@unique([symbol, timestamp])
+  @@index([symbol])
+  @@index([timestamp])
+}
