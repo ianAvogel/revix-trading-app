@@ -1,47 +1,73 @@
-import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { NextResponse } from 'next/server'
+import { marketDataService } from '@/services/market-data-service'
+import { prisma } from '@/lib/prisma'
 
 export const dynamic = 'force-dynamic'
 
-// This is a simplified mock. In a real app, you'd use a WebSocket or a real-time data provider.
-const lastPrices: Record<string, number> = {
-  BTC: 68000,
-  ETH: 3500,
-  SOL: 150,
-};
+export async function GET(request: Request) {
+  try {
+    const { searchParams } = new URL(request.url)
+    const symbols = searchParams.getAll('symbols') || ['BTC', 'ETH', 'SOL']
+    const timestampStr = searchParams.get('timestamp')
 
-export async function GET(req: Request) {
-  const { searchParams } = new URL(req.url);
-  const timestampStr = searchParams.get("timestamp");
-  const replayTimestamp = timestampStr ? new Date(timestampStr) : null;
+    // If replay timestamp is provided, fetch historical prices
+    if (timestampStr) {
+      const replayTimestamp = new Date(timestampStr)
 
-  if (replayTimestamp) {
-    // Fetch historical prices for the replay timestamp
-    const historicalPrices = await prisma.historicalData.findMany({
-      where: {
-        timestamp: {
-          lte: replayTimestamp,
-        },
-      },
-      orderBy: {
-        timestamp: 'desc',
-      },
-      distinct: ['symbol'],
-    });
+      try {
+        const historicalPrices = await prisma.historicalData.findMany({
+          where: {
+            timestamp: {
+              lte: replayTimestamp,
+            },
+          },
+          orderBy: {
+            timestamp: 'desc',
+          },
+          distinct: ['symbol'],
+        })
 
-    // @ts-ignore
-    const prices = historicalPrices.reduce((acc: Record<string, number>, p) => {
-      acc[p.symbol] = Number(p.close);
-      return acc;
-    }, {});
+        const prices: Record<string, number> = {}
+        historicalPrices.forEach(p => {
+          prices[p.symbol] = Number(p.close)
+        })
 
-    return NextResponse.json({ success: true, prices });
-  } else {
-    // Return live prices (mocked)
-    Object.keys(lastPrices).forEach(symbol => {
-      const change = (Math.random() - 0.5) * (lastPrices[symbol] * 0.001); // +/- 0.1%
-      lastPrices[symbol] += change;
-    });
-    return NextResponse.json({ success: true, prices: lastPrices });
+        return NextResponse.json({
+          success: true,
+          prices,
+          mode: 'replay',
+          timestamp: replayTimestamp.toISOString(),
+        })
+      } catch (error) {
+        console.error('Error fetching historical prices:', error)
+        // Fall through to live prices if historical fails
+      }
+    }
+
+    // Fetch real-time prices
+    if (symbols.length === 0) {
+      return NextResponse.json({ error: 'No symbols provided' }, { status: 400 })
+    }
+
+    const prices = await marketDataService.getMultiplePrices(symbols)
+    const pricesObj: Record<string, number> = {}
+
+    prices.forEach(priceData => {
+      pricesObj[priceData.symbol] = priceData.price
+    })
+
+    return NextResponse.json({
+      success: true,
+      prices: pricesObj,
+      fullData: Array.from(prices.values()),
+      mode: 'live',
+      timestamp: new Date().toISOString(),
+    })
+  } catch (error) {
+    console.error('Error fetching prices:', error)
+    return NextResponse.json(
+      { error: 'Failed to fetch prices', details: error instanceof Error ? error.message : 'Unknown error' },
+      { status: 500 }
+    )
   }
 }

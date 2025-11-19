@@ -37,6 +37,8 @@ model User {
   signalActions UserSignalAction[]
   leaderboardEntries LeaderboardEntry[]
   tournamentEntries TournamentEntry[]
+  followers     Follow[] @relation("Follower")
+  following     Follow[] @relation("Following")
 
   @@index([email])
   @@index([alias])
@@ -332,4 +334,24 @@ model HistoricalData {
   @@unique([symbol, timestamp])
   @@index([symbol])
   @@index([timestamp])
+}
+
+// ============================================
+// SOCIAL / FOLLOWS
+// ============================================
+
+model Follow {
+  id          String   @id @default(cuid())
+  
+  followerId  String
+  follower    User     @relation("Follower", fields: [followerId], references: [id], onDelete: Cascade)
+  
+  followingId String
+  following   User     @relation("Following", fields: [followingId], references: [id], onDelete: Cascade)
+  
+  createdAt   DateTime @default(now())
+
+  @@unique([followerId, followingId])
+  @@index([followerId])
+  @@index([followingId])
 }
